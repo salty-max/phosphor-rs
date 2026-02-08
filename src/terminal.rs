@@ -2,8 +2,6 @@ use std::ffi::c_void;
 use std::io;
 use std::os::fd::RawFd;
 
-use libc::winsize;
-
 /// Abstraction over system calls relative to the terminal.
 pub trait System {
     fn open_tty(&self) -> io::Result<RawFd>;
@@ -105,11 +103,21 @@ impl System for LibcSystem {
     }
 }
 
+use std::fmt;
+
 /// High-level wrapper around the terminal.
 pub struct Terminal {
     system: Box<dyn System>,
     fd: RawFd,
     original_termios: Option<libc::termios>,
+}
+
+impl fmt::Debug for Terminal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Terminal")
+            .field("fd", &self.fd)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Terminal {
@@ -119,7 +127,7 @@ impl Terminal {
 
     /// Creates a new Terminal. immediately enabling raw mode.
     pub fn new_with_system(system: Box<dyn System>) -> io::Result<Self> {
-        let fd = system.open_tty().unwrap();
+        let fd = system.open_tty()?;
         let termios = system.enable_raw(fd)?;
         Ok(Self {
             system,
@@ -157,6 +165,8 @@ mod tests {
 
     use std::sync::{Arc, Mutex};
 
+    // --- Integration Tests (Ignored by default) ---
+
     #[test]
     #[ignore]
     fn test_libc_system_open_tty() {
@@ -184,9 +194,8 @@ mod tests {
         sys.disable_raw(fd, &original)
             .expect("Failed to disable raw");
 
-        // 4. Verify ECHO is back on (assuming it was on before)
+        // 4. Verify ECHO is back on
         unsafe { libc::tcgetattr(fd, &mut current) };
-        // We compare against the original we captured
         assert_eq!(
             current.c_lflag & libc::ECHO,
             original.c_lflag & libc::ECHO,
@@ -196,10 +205,89 @@ mod tests {
         unsafe { libc::close(fd) };
     }
 
-    // MockSystem to record calls
+    #[test]
+    #[ignore]
+    fn test_libc_system_io() {
+        let sys = LibcSystem;
+        let fd = sys.open_tty().expect("Failed to open TTY");
+
+        // Test Write
+        let msg = b"Integration Test: Hello World\r\n";
+        let written = sys.write(fd, msg).expect("Failed to write");
+        assert_eq!(written, msg.len());
+
+        // We can't easily test read without user interaction,
+        // but we can verify the call doesn't panic.
+
+        unsafe { libc::close(fd) };
+    }
+
+    // --- Unit Tests ---
+
+    #[test]
+    fn test_terminal_initialization() {
+        let mock = MockSystem::new();
+        let log_ref = mock.log.clone();
+        let _term = Terminal::new_with_system(Box::new(mock)).unwrap();
+
+        let log = log_ref.lock().unwrap();
+        assert!(log.contains(&"open_tty".to_string()));
+        assert!(log.iter().any(|entry| entry.starts_with("enable_raw")));
+    }
+
+    #[test]
+    fn test_lifecycle_and_delegation() {
+        let mock = MockSystem::new();
+        let log_ref = mock.log.clone();
+
+        {
+            let term = Terminal::new_with_system(Box::new(mock)).expect("Failed to init terminal");
+
+            term.size().unwrap();
+            term.write(b"foo").unwrap();
+
+            let mut buf = [0u8; 10];
+            term.read(&mut buf).unwrap();
+
+            // Drop happens here
+        }
+
+        let log = log_ref.lock().unwrap();
+        assert_eq!(log[0], "open_tty");
+        assert_eq!(log[1], "enable_raw(100)");
+        assert_eq!(log[2], "get_window_size(100)");
+        assert_eq!(log[3], "write(100, 3 bytes)");
+        assert_eq!(log[4], "read(100)");
+        assert_eq!(log[5], "disable_raw(100)");
+    }
+
+    #[test]
+    fn test_initialization_failure_open() {
+        let mut mock = MockSystem::new();
+        mock.fail_open = true;
+
+        let res = Terminal::new_with_system(Box::new(mock));
+        assert!(res.is_err());
+        assert_eq!(res.unwrap_err().kind(), io::ErrorKind::Other);
+    }
+
+    #[test]
+    fn test_initialization_failure_enable_raw() {
+        let mut mock = MockSystem::new();
+        mock.fail_enable_raw = true;
+
+        let res = Terminal::new_with_system(Box::new(mock));
+        assert!(res.is_err());
+        assert_eq!(res.unwrap_err().kind(), io::ErrorKind::Other);
+    }
+
+    // --- Mocks ---
+
     #[derive(Default)]
     struct MockSystem {
         log: Arc<Mutex<Vec<String>>>,
+        fail_open: bool,
+        fail_enable_raw: bool,
     }
 
     impl MockSystem {
@@ -210,20 +298,25 @@ mod tests {
         fn push_log(&self, msg: &str) {
             self.log.lock().unwrap().push(msg.to_string());
         }
-
-        fn get_log(&self) -> Vec<String> {
-            self.log.lock().unwrap().clone()
-        }
     }
 
     impl System for MockSystem {
         fn open_tty(&self) -> io::Result<RawFd> {
             self.push_log("open_tty");
+            if self.fail_open {
+                return Err(io::Error::new(io::ErrorKind::Other, "Mock Open Failed"));
+            }
             Ok(100)
         }
 
         fn enable_raw(&self, fd: RawFd) -> io::Result<libc::termios> {
             self.push_log(&format!("enable_raw({})", fd));
+            if self.fail_enable_raw {
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    "Mock Enable Raw Failed",
+                ));
+            }
             Ok(unsafe { std::mem::zeroed() })
         }
 
@@ -246,40 +339,5 @@ mod tests {
             self.push_log(&format!("write({}, {} bytes)", fd, buf.len()));
             Ok(buf.len())
         }
-    }
-
-    #[test]
-    fn test_terminal_initialization() {
-        let mock = MockSystem::new();
-        let log_ref = mock.log.clone();
-        let _term = Terminal::new_with_system(Box::new(mock)).unwrap();
-
-        let log = log_ref.lock().unwrap();
-        assert!(log.contains(&"open_tty".to_string()));
-        // We don't know the FD yet, but we know it should have enabled raw mode
-        assert!(log.iter().any(|entry| entry.starts_with("enable_raw")));
-    }
-
-    #[test]
-    fn test_lifecycle_and_delegation() {
-        let mock = MockSystem::new();
-        let log_ref = mock.log.clone();
-
-        {
-            let term = Terminal::new_with_system(Box::new(mock)).expect("Failed to init terminal");
-
-            // Should have opened and enabled
-            term.size().unwrap();
-            term.write(b"foo").unwrap();
-
-            // Drop happens here
-        }
-
-        let log = log_ref.lock().unwrap();
-        assert_eq!(log[0], "open_tty");
-        assert_eq!(log[1], "enable_raw(100)");
-        assert_eq!(log[2], "get_window_size(100)");
-        assert_eq!(log[3], "write(100, 3 bytes)");
-        assert_eq!(log[4], "disable_raw(100)");
     }
 }
