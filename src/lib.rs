@@ -1,7 +1,29 @@
-//! **Briks** is a minimalist TUI (Text User Interface) framework.
+//! **Briks** is a minimalist, testable TUI (Text User Interface) framework for Rust.
 //!
-//! It provides a runtime loop, input handling, and a raw terminal abstraction.
-//! Users implement the [`Application`] trait to define their logic.
+//! It follows the **Model-View-Update (MVU)** architecture (similar to Elm or Iced),
+//! providing a clean separation between your application logic and the terminal hardware.
+//!
+//! # Core Concepts
+//! * **[`Application`]**: The trait you implement to define your app's state, logic, and view.
+//! * **[`Application::Action`]**: A custom type representing things that can happen in your app.
+//! * **[`Command`]**: Instructions returned to the runtime (e.g., to quit).
+//! * **[`run`]**: The entry point that drives the event loop.
+//!
+//! # Example
+//! ```no_run
+//! use briks::{Application, Command, run, input::Event};
+//!
+//! struct MyApp;
+//! impl Application for MyApp {
+//!     type Action = ();
+//!     fn update(&mut self, _msg: ()) -> Command { Command::Quit }
+//!     fn draw(&self) -> String { "Hello Briks!".to_string() }
+//! }
+//!
+//! fn main() -> std::io::Result<()> {
+//!     run(MyApp)
+//! }
+//! ```
 
 use std::io;
 use std::thread;
@@ -22,46 +44,59 @@ pub mod terminal;
 pub enum Command {
     /// Continue running the application loop.
     None,
-    /// Stop the application and exit.
+    /// Stop the application and exit immediately.
     Quit,
 }
 
 /// The core trait for a Briks application.
 ///
-/// This follows a simplified Model-View-Update (MVU) pattern:
-/// 1. **Draw**: The state is rendered to a string.
-/// 2. **Event**: Input is converted into an internal `Action`.
-/// 3. **Update**: The `Action` modifies the state and returns a `Command`.
+/// Implementors define the state machine and rendering logic for their TUI.
 pub trait Application {
     /// The message type used to update the application state.
-    /// This allows decoupling raw input events from business logic.
+    ///
+    /// This is typically an `enum` representing user actions or system events
+    /// that your application cares about.
     type Action;
 
     /// Called once before the event loop starts.
+    ///
+    /// Use this to perform any initial setup or return an initial command.
     fn init(&self) -> Command {
         Command::None
     }
 
     /// Maps a raw terminal [`Event`] to an application-specific [`Self::Action`].
     ///
-    /// Return `None` to ignore the event.
+    /// This method acts as a filter/translator. Return `Some(action)` to trigger
+    /// an [`update`](Self::update), or `None` to ignore the event.
     fn on_event(&self, _event: Event) -> Option<Self::Action> {
         None
     }
 
     /// Updates the application state based on an action.
     ///
-    /// Returns a [`Command`] to control the runtime (e.g., to quit).
+    /// This is the only place where you should modify your application state.
+    /// It returns a [`Command`] to tell the runtime what to do next.
     fn update(&mut self, msg: Self::Action) -> Command;
 
     /// Renders the current application state as a string.
+    ///
+    /// The returned string will be drawn to the terminal. Use ANSI escape codes
+    /// for colors and styling, or wait for the upcoming `Buffer` system!
     fn draw(&self) -> String;
 }
 
 /// Entry point to run a Briks application.
 ///
-/// This initializes the terminal in Raw Mode, sets up input capturing,
-/// and enters the main event loop.
+/// This function:
+/// 1. Initializes the terminal in **Raw Mode**.
+/// 2. Sets up input capturing.
+/// 3. Executes the [`Application::init`] hook.
+/// 4. Enters the main event loop (Render -> Input -> Update).
+///
+/// # Errors
+/// Returns an [`io::Error`] if the terminal cannot be initialized or if a
+/// write operation fails.
 pub fn run<App: Application>(app: App) -> io::Result<()> {
     let terminal = Terminal::new()?;
     let input = Input::new();

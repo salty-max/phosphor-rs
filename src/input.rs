@@ -1,9 +1,12 @@
 //! The `input` module handles the parsing of raw byte streams into semantic events.
 //!
-//! It provides:
-//! * [`Event`]: A high-level enum representing things that happen (Keys, Resizes).
-//! * [`Input`]: The main entry point to read from the terminal and get events.
-//! * [`Parser`]: A state machine that decodes ANSI escape sequences and UTF-8 characters.
+//! It provides a robust state machine ([`Parser`]) that can
+//! handle fragmented ANSI escape sequences and multi-byte UTF-8 characters.
+//!
+//! # Architecture
+//! * [`Event`]: The high-level representation of user input.
+//! * [`Input`]: The primary interface for reading events from a [`Terminal`].
+//! * [`Parser`]: The internal logic for decoding bytes.
 
 use std::collections::VecDeque;
 use std::fmt;
@@ -14,9 +17,9 @@ use crate::terminal::Terminal;
 /// Represents a distinct event occurring in the application.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
-    /// A keyboard press (char, control key, function key).
+    /// A keyboard press (character, control key, or function key).
     Key(KeyEvent),
-    /// A terminal resize event (cols, rows).
+    /// A terminal resize event (columns, rows).
     Resize(u16, u16),
 }
 
@@ -49,21 +52,29 @@ impl KeyEvent {
 pub enum KeyCode {
     /// A standard character key (e.g., 'a', '1', '?').
     Char(char),
+    /// The Enter key (`\r`).
     Enter,
+    /// The Backspace key (`\x7f`).
     Backspace,
+    /// The Escape key (`\x1b`).
     Esc,
+    /// Arrow keys.
     Left,
     Right,
     Up,
     Down,
+    /// The Tab key.
     Tab,
+    /// The Delete key.
     Delete,
+    /// Navigation keys.
     Home,
     End,
     PageUp,
     PageDown,
     /// Function keys (F1-F12).
     F(u8),
+    /// A null byte or empty event.
     Null,
 }
 
@@ -72,8 +83,11 @@ pub enum KeyCode {
 pub struct KeyModifiers(u8);
 
 impl KeyModifiers {
+    /// Shift key modifier.
     pub const SHIFT: Self = Self(0b0000_0001);
+    /// Control key modifier.
     pub const CTRL: Self = Self(0b0000_0010);
+    /// Alt key modifier.
     pub const ALT: Self = Self(0b0000_0100);
 
     /// Returns an empty set of modifiers.
@@ -108,7 +122,6 @@ impl fmt::Debug for KeyModifiers {
     }
 }
 
-/// Allows combining modifiers using the `|` operator.
 impl std::ops::BitOr for KeyModifiers {
     type Output = Self;
     fn bitor(self, rhs: Self) -> Self {
@@ -117,6 +130,9 @@ impl std::ops::BitOr for KeyModifiers {
 }
 
 /// Internal state machine for parsing byte streams into Events.
+///
+/// The parser maintains an internal buffer to handle cases where a single
+/// event (like an arrow key) is split across multiple read operations.
 pub struct Parser {
     buffer: VecDeque<u8>,
 }
@@ -128,6 +144,7 @@ impl Default for Parser {
 }
 
 impl Parser {
+    /// Creates a new, empty parser.
     pub fn new() -> Self {
         Self {
             buffer: VecDeque::new(),
@@ -136,6 +153,9 @@ impl Parser {
 
     /// Parses a slice of bytes and appends them to the internal buffer,
     /// returning any complete events found.
+    ///
+    /// This method will consume as many bytes as possible from the buffer
+    /// to form complete [`Event`]s.
     pub fn parse(&mut self, bytes: &[u8]) -> Vec<Event> {
         self.buffer.extend(bytes);
         let mut events: Vec<Event> = Vec::new();
@@ -145,19 +165,20 @@ impl Parser {
                 break;
             }
 
-            // Look at the first byte without removing it yet
             match self.buffer[0] {
                 b'\r' => {
                     events.push(Event::Key(KeyEvent::new(KeyCode::Enter)));
                     self.buffer.pop_front();
                 }
                 b'\x1b' => {
-                    // Start of an Escape Sequence
                     if self.buffer.len() == 1 {
                         break; // Incomplete, wait for more data
                     }
 
-                    // Check for CSI (Control Sequence Introducer) `\x1b[`
+                    if self.buffer[1] == b'[' && self.buffer.len() < 3 {
+                        break; // Incomplete CSI, wait for more data
+                    }
+
                     if self.buffer.len() >= 3 && self.buffer[1] == b'[' {
                         match self.buffer[2] {
                             b'A' => {
@@ -165,26 +186,21 @@ impl Parser {
                                 self.consume(3);
                             }
                             _ => {
-                                // Unknown CSI sequence, consume ESC to prevent stuck loop
                                 events.push(Event::Key(KeyEvent::new(KeyCode::Esc)));
                                 self.buffer.pop_front();
                             }
                         }
                     } else {
-                        // Just a raw Esc key
                         events.push(Event::Key(KeyEvent::new(KeyCode::Esc)));
                         self.buffer.pop_front();
                     }
                 }
                 b => {
-                    // Regular UTF-8 Character parsing
                     let width = utf8_char_width(b);
 
                     if width == 0 {
-                        // Invalid byte, consume it to skip
                         self.buffer.pop_front();
                     } else if self.buffer.len() >= width {
-                        // Extract the valid UTF-8 slice
                         let bytes: Vec<u8> = self.buffer.range(0..width).copied().collect();
                         if let Ok(s) = std::str::from_utf8(&bytes)
                             && let Some(c) = s.chars().next()
@@ -193,7 +209,6 @@ impl Parser {
                         }
                         self.consume(width);
                     } else {
-                        // Incomplete UTF-8 char, wait for more data
                         break;
                     }
                 }
@@ -209,26 +224,25 @@ impl Parser {
     }
 
     /// Forces the parser to interpret whatever is left in the buffer.
-    /// Used when a timeout occurs.
+    ///
+    /// This is called when a timeout occurs during polling, indicating that
+    /// an ambiguous sequence (like a lone `\x1b`) should be treated as a
+    /// complete event (the `Esc` key).
     pub fn finish_incomplete(&mut self) -> Vec<Event> {
         let mut events: Vec<Event> = Vec::new();
         if self.buffer.is_empty() {
             return events;
         }
 
-        // If there is a lone \x1b, it is an Esc key
         if self.buffer[0] == b'\x1b' {
             events.push(Event::Key(KeyEvent::new(KeyCode::Esc)));
             self.buffer.pop_front();
         }
 
-        // If there's garbage left, drop it.
         self.buffer.clear();
-
         events
     }
 
-    /// Helper to remove `n` bytes from the front of the queue
     fn consume(&mut self, n: usize) {
         for _ in 0..n {
             self.buffer.pop_front();
@@ -236,7 +250,6 @@ impl Parser {
     }
 }
 
-/// Helper to determine the byte width of a UTF-8 character based on the first byte.
 fn utf8_char_width(first_byte: u8) -> usize {
     if first_byte & 0b10000000 == 0 {
         1
@@ -251,14 +264,17 @@ fn utf8_char_width(first_byte: u8) -> usize {
     }
 }
 
-/// The main input handler.
+/// The main input handler for a Briks application.
 ///
-/// Reads raw bytes from the [`Terminal`] and uses the [`Parser`] to produce [`Event`]s.
+/// It reads raw bytes from the [`Terminal`] and uses an internal [`Parser`]
+/// to produce semantic [`Event`]s. It handles the ambiguity of the `Esc` key
+/// by polling the terminal for a short duration.
 pub struct Input {
     parser: Parser,
 }
 
 impl Input {
+    /// Creates a new `Input` handler.
     pub fn new() -> Self {
         Self {
             parser: Parser::new(),
@@ -267,13 +283,16 @@ impl Input {
 
     /// Reads available bytes from the terminal and returns a vector of parsed events.
     ///
-    /// This method is non-blocking if the underlying terminal read is non-blocking,
-    /// or blocking otherwise (standard `read` behavior).
+    /// This method will block until at least one byte is read from the terminal.
+    /// If the read byte is the start of an escape sequence, it will poll the
+    /// terminal for up to 50ms to see if more bytes arrive.
+    ///
+    /// # Errors
+    /// Returns an error if the underlying terminal read or poll fails.
     pub fn read(&mut self, term: &Terminal) -> Vec<Event> {
         let mut buf = [0u8; 1024];
         let mut events: Vec<Event> = Vec::new();
 
-        // 1. Blocking read (wait for initial input)
         match term.read(&mut buf) {
             Ok(n) if n > 0 => {
                 events.extend(self.parser.parse(&buf[..n]));
@@ -281,25 +300,16 @@ impl Input {
             _ => return events,
         }
 
-        // 2. Ambiguity check
-        // If the parser has leftover bytes (like a raw \x1b), we need to distinguish
-        // between `User pressed Esc` and `Network is slow sending [A`
-        if self.parser.has_pending_state() {
-            // Wait 50ms to see if more data arrives
+        while self.parser.has_pending_state() {
             match term.poll(Duration::from_millis(50)) {
                 Ok(true) => {
-                    // Data available. It was an escape sequence.
                     if let Ok(n) = term.read(&mut buf) {
                         events.extend(self.parser.parse(&buf[..n]));
                     }
                 }
-                Ok(false) => {
-                    // Timeout ! Just a lone key press
+                Ok(false) | Err(_) => {
                     events.extend(self.parser.finish_incomplete());
-                }
-                Err(_) => {
-                    // On error, just flush
-                    events.extend(self.parser.finish_incomplete());
+                    break;
                 }
             }
         }
@@ -382,5 +392,43 @@ mod integration_tests {
 
         // Assert
         assert_eq!(events, vec![Event::Key(KeyEvent::new(KeyCode::Char('a')))]);
+    }
+
+    #[test]
+    fn test_input_esc_timeout() {
+        // Arrange: Lone Esc byte
+        let mock = MockSystem::new();
+        mock.push_input(b"\x1b");
+
+        let term = Terminal::new_with_system(Box::new(mock)).unwrap();
+        let mut input = Input::new();
+
+        // Act: Read should see Esc, then poll will return false (empty buffer)
+        let events = input.read(&term);
+
+        // Assert: Should be interpreted as Esc key
+        assert_eq!(events, vec![Event::Key(KeyEvent::new(KeyCode::Esc))]);
+    }
+
+    #[test]
+    fn test_input_split_arrow() {
+        // Arrange: Split Up Arrow sequence (\x1b[A)
+        // We use with_max_read(1) to force chunked reads
+        let mock = MockSystem::new().with_max_read(1);
+        mock.push_input(b"\x1b[A");
+
+        let term = Terminal::new_with_system(Box::new(mock)).unwrap();
+        let mut input = Input::new();
+
+        // Act:
+        // 1. First read gets \x1b
+        // 2. has_pending_state is true
+        // 3. poll is called, returns true (buffer has [A)
+        // 4. Second read gets [A
+        // 5. Parser combines them into Up Arrow
+        let events = input.read(&term);
+
+        // Assert
+        assert_eq!(events, vec![Event::Key(KeyEvent::new(KeyCode::Up))]);
     }
 }

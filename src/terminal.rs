@@ -15,35 +15,50 @@
 use std::ffi::c_void;
 use std::io;
 use std::os::fd::RawFd;
+use std::time::Duration;
 
 /// Abstraction over system calls relative to the terminal.
 ///
-/// This trait acts as a "seam" for testing, allowing the `Terminal` struct to
+/// This trait acts as a "seam" for testing, allowing the [`Terminal`] struct to
 /// interact with a mock OS during unit tests instead of making real syscalls.
 pub trait System {
     /// Opens a file descriptor to the current TTY (usually `/dev/tty`).
+    ///
+    /// # Errors
+    /// Returns an error if the device cannot be opened.
     fn open_tty(&self) -> io::Result<RawFd>;
 
     /// Enables "Raw Mode" on the specified file descriptor.
     ///
-    /// This disables:
-    /// * **Canonical Mode** (line buffering).
-    /// * **Echo** (displaying typed characters).
-    /// * **Signal Processing** (Ctrl+C, Ctrl+Z handling by the OS).
-    ///
+    /// This disables line buffering, local echo, and signal processing.
     /// Returns the original `termios` configuration so it can be restored later.
+    ///
+    /// # Errors
+    /// Returns an error if the terminal attributes cannot be retrieved or set.
     fn enable_raw(&self, fd: RawFd) -> io::Result<libc::termios>;
 
     /// Restores the terminal to its original configuration (Canonical Mode).
+    ///
+    /// # Errors
+    /// Returns an error if the terminal attributes cannot be restored.
     fn disable_raw(&self, fd: RawFd, original: &libc::termios) -> io::Result<()>;
 
-    /// queries the kernel for the current terminal window size (cols, rows).
+    /// Queries the kernel for the current terminal window size (cols, rows).
+    ///
+    /// # Errors
+    /// Returns an error if the `ioctl` call fails.
     fn get_window_size(&self, fd: RawFd) -> io::Result<(u16, u16)>;
 
     /// Reads raw bytes from the file descriptor into the buffer.
+    ///
+    /// # Errors
+    /// Returns an error if the read operation fails.
     fn read(&self, fd: RawFd, buf: &mut [u8]) -> io::Result<usize>;
 
     /// Writes raw bytes from the buffer to the file descriptor.
+    ///
+    /// # Errors
+    /// Returns an error if the write operation fails.
     fn write(&self, fd: RawFd, buf: &[u8]) -> io::Result<usize>;
 
     /// Checks if data is available to read within the given timeout.
@@ -55,14 +70,14 @@ pub trait System {
 
 /// The production implementation of [`System`] using `libc` calls.
 ///
-/// This struct performs `unsafe` FFI calls to the underlying OS.
+/// This struct performs `unsafe` FFI calls to the underlying OS. It is the
+/// default backend for [`Terminal`].
 pub struct LibcSystem;
 
 impl System for LibcSystem {
+    /// Opens `/dev/tty` for read/write access.
     fn open_tty(&self) -> io::Result<RawFd> {
         unsafe {
-            // map_err is needed because CString::new fails if the string contains null bytes,
-            // returning a NulError which doesn't auto-convert to io::Error.
             let path = std::ffi::CString::new("/dev/tty")
                 .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "Invalid path"))?;
 
@@ -74,31 +89,29 @@ impl System for LibcSystem {
         }
     }
 
+    /// Configures the terminal for raw I/O.
+    ///
+    /// Flags modified:
+    /// * `c_iflag`: Disables `BRKINT`, `ICRNL`, `INPCK`, `ISTRIP`, `IXON`.
+    /// * `c_oflag`: Disables `OPOST`.
+    /// * `c_cflag`: Sets `CS8`.
+    /// * `c_lflag`: Disables `ECHO`, `ICANON`, `IEXTEN`, `ISIG`.
     fn enable_raw(&self, fd: RawFd) -> io::Result<libc::termios> {
         unsafe {
             let mut termios = std::mem::zeroed();
 
-            // Load current attributes
             if libc::tcgetattr(fd, &mut termios) < 0 {
                 return Err(io::Error::last_os_error());
             }
 
             let original = termios;
 
-            // Input flags: Disable software flow control & special handling
             termios.c_iflag &=
                 !(libc::BRKINT | libc::ICRNL | libc::INPCK | libc::ISTRIP | libc::IXON);
-
-            // Output flags: Disable post-processing (e.g. \n -> \r\n translation)
             termios.c_oflag &= !(libc::OPOST);
-
-            // Control flags: Set 8 bits per character
             termios.c_cflag |= libc::CS8;
-
-            // Local flags: Disable Echo, Canonical mode, Extended input, and Signals
             termios.c_lflag &= !(libc::ECHO | libc::ICANON | libc::IEXTEN | libc::ISIG);
 
-            // Apply changes immediately (TCSAFLUSH drains output before changing)
             if libc::tcsetattr(fd, libc::TCSAFLUSH, &termios) < 0 {
                 return Err(io::Error::last_os_error());
             }
@@ -125,7 +138,6 @@ impl System for LibcSystem {
                 ws_ypixel: 0,
             };
 
-            // TIOCGWINSZ = Terminal IO Control Get Window SiZe
             if libc::ioctl(fd, libc::TIOCGWINSZ, &mut winsize) < 0 {
                 return Err(io::Error::last_os_error());
             }
@@ -162,7 +174,6 @@ impl System for LibcSystem {
                 revents: 0,
             };
 
-            // timeout needs to be in msecs
             let timeout_ms = timeout.as_millis() as libc::c_int;
 
             let ret = libc::poll(&mut pfd, 1, timeout_ms);
@@ -176,19 +187,15 @@ impl System for LibcSystem {
 }
 
 use std::fmt;
-use std::time::Duration;
 
 /// A high-level wrapper around the terminal state and I/O.
 ///
-/// This struct manages the lifecycle of **Raw Mode**.
-/// * On creation: It opens the TTY and enables Raw Mode.
-/// * On drop: It automatically restores the original terminal configuration.
+/// This struct manages the lifecycle of **Raw Mode** using the RAII pattern.
+/// When a `Terminal` is created, it takes control of the TTY. When it is dropped,
+/// it automatically restores the original terminal configuration.
 pub struct Terminal {
-    /// The abstract system backend (Real or Mock).
     system: Box<dyn System>,
-    /// The file descriptor of the active TTY.
     fd: RawFd,
-    /// The original terminal attributes, preserved for restoration on exit.
     original_termios: Option<libc::termios>,
 }
 
@@ -201,9 +208,12 @@ impl fmt::Debug for Terminal {
 }
 
 impl Terminal {
-    /// Creates a new `Terminal` instance using the default `LibcSystem`.
+    /// Creates a new `Terminal` instance using the default [`LibcSystem`].
     ///
     /// This will attempt to open `/dev/tty` and enter Raw Mode immediately.
+    ///
+    /// # Errors
+    /// Returns an error if `/dev/tty` cannot be opened or if Raw Mode cannot be enabled.
     pub fn new() -> io::Result<Self> {
         Self::new_with_system(Box::new(LibcSystem))
     }
@@ -246,8 +256,10 @@ impl Terminal {
     }
 }
 
-/// Automatically restores the terminal configuration when the struct goes out of scope.
 impl Drop for Terminal {
+    /// Automatically restores the terminal configuration.
+    ///
+    /// If restoration fails, the error is logged to `debug.log`.
     fn drop(&mut self) {
         if let Some(termios) = self.original_termios
             && let Err(e) = self.system.disable_raw(self.fd, &termios)
@@ -257,63 +269,98 @@ impl Drop for Terminal {
     }
 }
 
-// ... existing test modules (integration_tests and tests) ...
-// (I have omitted the test code here for brevity as it remains unchanged,
-//  but you should keep it in your file)
-
 #[cfg(test)]
-mod integration_tests {
+pub(crate) mod mocks {
     use super::*;
+    use std::sync::{Arc, Mutex};
 
-    #[test]
-    #[ignore]
-    fn test_libc_system_open_tty() {
-        let sys = LibcSystem;
-        let fd = sys.open_tty().expect("Failed to open /dev/tty");
-        assert!(fd > 0);
-        unsafe { libc::close(fd) };
+    #[derive(Default)]
+    pub struct MockSystem {
+        pub log: Arc<Mutex<Vec<String>>>,
+        pub input_buffer: Arc<Mutex<Vec<u8>>>,
+        pub fail_open: bool,
+        pub fail_enable_raw: bool,
+        pub max_read_size: Option<usize>,
     }
 
-    #[test]
-    #[ignore]
-    fn test_libc_system_raw_mode() {
-        let sys = LibcSystem;
-        let fd = sys.open_tty().expect("Failed to open TTY");
+    impl MockSystem {
+        pub fn new() -> Self {
+            Self::default()
+        }
 
-        let original = sys.enable_raw(fd).expect("Failed to enable raw");
+        pub fn with_max_read(mut self, size: usize) -> Self {
+            self.max_read_size = Some(size);
+            self
+        }
 
-        let mut current: libc::termios = unsafe { std::mem::zeroed() };
-        unsafe { libc::tcgetattr(fd, &mut current) };
-        assert_eq!(current.c_lflag & libc::ECHO, 0, "ECHO should be disabled");
+        pub fn push_input(&self, data: &[u8]) {
+            self.input_buffer.lock().unwrap().extend_from_slice(data);
+        }
 
-        sys.disable_raw(fd, &original)
-            .expect("Failed to disable raw");
-
-        unsafe { libc::tcgetattr(fd, &mut current) };
-        assert_eq!(
-            current.c_lflag & libc::ECHO,
-            original.c_lflag & libc::ECHO,
-            "ECHO state should be restored"
-        );
-
-        unsafe { libc::close(fd) };
+        fn push_log(&self, msg: &str) {
+            self.log.lock().unwrap().push(msg.to_string());
+        }
     }
 
-    #[test]
-    #[ignore]
-    fn test_libc_system_io() {
-        let sys = LibcSystem;
-        let fd = sys.open_tty().expect("Failed to open TTY");
+    impl System for MockSystem {
+        fn open_tty(&self) -> io::Result<RawFd> {
+            self.push_log("open_tty");
+            if self.fail_open {
+                return Err(io::Error::new(io::ErrorKind::Other, "Mock Open Failed"));
+            }
+            Ok(100)
+        }
 
-        let msg = b"Integration Test: Hello World\r\n";
-        let written = sys.write(fd, msg).expect("Failed to write");
-        assert_eq!(written, msg.len());
+        fn enable_raw(&self, fd: RawFd) -> io::Result<libc::termios> {
+            self.push_log(&format!("enable_raw({})", fd));
+            if self.fail_enable_raw {
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    "Mock Enable Raw Failed",
+                ));
+            }
+            // Return empty termios
+            Ok(unsafe { std::mem::zeroed() })
+        }
 
-        let size = sys.get_window_size(fd).expect("Failed to get window size");
-        assert!(size.0 > 0);
-        assert!(size.1 > 0);
+        fn disable_raw(&self, fd: RawFd, _original: &libc::termios) -> io::Result<()> {
+            self.push_log(&format!("disable_raw({})", fd));
+            Ok(())
+        }
 
-        unsafe { libc::close(fd) };
+        fn get_window_size(&self, fd: RawFd) -> io::Result<(u16, u16)> {
+            self.push_log(&format!("get_window_size({})", fd));
+            Ok((80, 24))
+        }
+
+        fn read(&self, fd: RawFd, buf: &mut [u8]) -> io::Result<usize> {
+            self.push_log(&format!("read({})", fd));
+            let mut input = self.input_buffer.lock().unwrap();
+            if input.is_empty() {
+                return Ok(0);
+            }
+            
+            let mut len = std::cmp::min(buf.len(), input.len());
+            if let Some(max) = self.max_read_size {
+                len = std::cmp::min(len, max);
+            }
+
+            // copy_from_slice handles copying data
+            buf[..len].copy_from_slice(&input[..len]);
+            // Remove read bytes from the "mock input stream"
+            input.drain(0..len);
+            Ok(len)
+        }
+
+        fn write(&self, fd: RawFd, buf: &[u8]) -> io::Result<usize> {
+            self.push_log(&format!("write({}, {} bytes)", fd, buf.len()));
+            Ok(buf.len())
+        }
+
+        fn poll(&self, _fd: RawFd, _timeout: Duration) -> io::Result<bool> {
+            let input = self.input_buffer.lock().unwrap();
+            Ok(!input.is_empty())
+        }
     }
 }
 
@@ -383,85 +430,57 @@ mod tests {
 }
 
 #[cfg(test)]
-pub(crate) mod mocks {
+mod integration_tests {
     use super::*;
-    use std::sync::{Arc, Mutex};
 
-    #[derive(Default)]
-    pub struct MockSystem {
-        pub log: Arc<Mutex<Vec<String>>>,
-        pub input_buffer: Arc<Mutex<Vec<u8>>>,
-        pub fail_open: bool,
-        pub fail_enable_raw: bool,
+    #[test]
+    #[ignore]
+    fn test_libc_system_open_tty() {
+        let sys = LibcSystem;
+        let fd = sys.open_tty().expect("Failed to open /dev/tty");
+        assert!(fd > 0);
+        unsafe { libc::close(fd) };
     }
 
-    impl MockSystem {
-        pub fn new() -> Self {
-            Self::default()
-        }
+    #[test]
+    #[ignore]
+    fn test_libc_system_raw_mode() {
+        let sys = LibcSystem;
+        let fd = sys.open_tty().expect("Failed to open TTY");
 
-        pub fn push_input(&self, data: &[u8]) {
-            self.input_buffer.lock().unwrap().extend_from_slice(data);
-        }
+        let original = sys.enable_raw(fd).expect("Failed to enable raw");
 
-        fn push_log(&self, msg: &str) {
-            self.log.lock().unwrap().push(msg.to_string());
-        }
+        let mut current: libc::termios = unsafe { std::mem::zeroed() };
+        unsafe { libc::tcgetattr(fd, &mut current) };
+        assert_eq!(current.c_lflag & libc::ECHO, 0, "ECHO should be disabled");
+
+        sys.disable_raw(fd, &original)
+            .expect("Failed to disable raw");
+
+        unsafe { libc::tcgetattr(fd, &mut current) };
+        assert_eq!(
+            current.c_lflag & libc::ECHO,
+            original.c_lflag & libc::ECHO,
+            "ECHO state should be restored"
+        );
+
+        unsafe { libc::close(fd) };
     }
 
-    impl System for MockSystem {
-        fn open_tty(&self) -> io::Result<RawFd> {
-            self.push_log("open_tty");
-            if self.fail_open {
-                return Err(io::Error::new(io::ErrorKind::Other, "Mock Open Failed"));
-            }
-            Ok(100)
-        }
+    #[test]
+    #[ignore]
+    fn test_libc_system_io() {
+        let sys = LibcSystem;
+        let fd = sys.open_tty().expect("Failed to open TTY");
 
-        fn enable_raw(&self, fd: RawFd) -> io::Result<libc::termios> {
-            self.push_log(&format!("enable_raw({})", fd));
-            if self.fail_enable_raw {
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    "Mock Enable Raw Failed",
-                ));
-            }
-            // Return empty termios
-            Ok(unsafe { std::mem::zeroed() })
-        }
+        let msg = b"Integration Test: Hello World\r\n";
+        let written = sys.write(fd, msg).expect("Failed to write");
+        assert_eq!(written, msg.len());
 
-        fn disable_raw(&self, fd: RawFd, _original: &libc::termios) -> io::Result<()> {
-            self.push_log(&format!("disable_raw({})", fd));
-            Ok(())
-        }
+        let size = sys.get_window_size(fd).expect("Failed to get window size");
+        assert!(size.0 > 0);
+        assert!(size.1 > 0);
 
-        fn get_window_size(&self, fd: RawFd) -> io::Result<(u16, u16)> {
-            self.push_log(&format!("get_window_size({})", fd));
-            Ok((80, 24))
-        }
-
-        fn read(&self, fd: RawFd, buf: &mut [u8]) -> io::Result<usize> {
-            self.push_log(&format!("read({})", fd));
-            let mut input = self.input_buffer.lock().unwrap();
-            if input.is_empty() {
-                return Ok(0);
-            }
-            let len = std::cmp::min(buf.len(), input.len());
-            // copy_from_slice handles copying data
-            buf[..len].copy_from_slice(&input[..len]);
-            // Remove read bytes from the "mock input stream"
-            input.drain(0..len);
-            Ok(len)
-        }
-
-        fn write(&self, fd: RawFd, buf: &[u8]) -> io::Result<usize> {
-            self.push_log(&format!("write({}, {} bytes)", fd, buf.len()));
-            Ok(buf.len())
-        }
-
-        fn poll(&self, _fd: RawFd, _timeout: Duration) -> io::Result<bool> {
-            let input = self.input_buffer.lock().unwrap();
-            Ok(!input.is_empty())
-        }
+        unsafe { libc::close(fd) };
     }
 }

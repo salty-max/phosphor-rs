@@ -1,8 +1,19 @@
-//! A simple, thread-safe file logger for debugging.
+//! A simple, thread-safe file logger for debugging TUI applications.
 //!
 //! Because TUI applications capture `stdout` and `stderr` for rendering,
 //! standard `println!` debugging is invisible or breaks the UI.
 //! This module redirects logs to a file (`debug.log`).
+//!
+//! # Example
+//! ```no_run
+//! use briks::logger;
+//!
+//! fn main() -> std::io::Result<()> {
+//!     logger::init()?;
+//!     briks::log!("Application started");
+//!     Ok(())
+//! }
+//! ```
 
 use std::fs::File;
 use std::io::{self, Write};
@@ -16,6 +27,9 @@ static LOGGER: Mutex<Option<File>> = Mutex::new(None);
 /// Initializes the logger, creating (or truncating) `debug.log`.
 ///
 /// This should be called once at the start of the application.
+///
+/// # Errors
+/// Returns an [`io::Error`] if the file cannot be created.
 pub fn init() -> io::Result<()> {
     let file = File::create("debug.log")?;
     let mut guard = LOGGER.lock().unwrap();
@@ -40,8 +54,8 @@ pub fn write_log(msg: &str) {
 /// Usage is identical to `println!`.
 ///
 /// # Example
-/// ```ignore
-/// log!("Mouse event: {:?}", event);
+/// ```no_run
+/// # use briks::log;
 /// log!("Value: {}", 42);
 /// ```
 #[macro_export]
