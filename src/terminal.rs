@@ -298,7 +298,9 @@ pub(crate) mod mocks {
         }
 
         fn push_log(&self, msg: &str) {
-            self.log.lock().unwrap().push(msg.to_string());
+            if let Ok(mut log) = self.log.lock() {
+                log.push(msg.to_string());
+            }
         }
     }
 
@@ -339,7 +341,7 @@ pub(crate) mod mocks {
             if input.is_empty() {
                 return Ok(0);
             }
-            
+
             let mut len = std::cmp::min(buf.len(), input.len());
             if let Some(max) = self.max_read_size {
                 len = std::cmp::min(len, max);
@@ -353,7 +355,8 @@ pub(crate) mod mocks {
         }
 
         fn write(&self, fd: RawFd, buf: &[u8]) -> io::Result<usize> {
-            self.push_log(&format!("write({}, {} bytes)", fd, buf.len()));
+            let content = String::from_utf8_lossy(buf);
+            self.push_log(&format!("write({}, \"{}\")", fd, content));
             Ok(buf.len())
         }
 
@@ -403,7 +406,7 @@ mod tests {
         // enable_raw(100) -> 100 is the hardcoded FD in the Mock
         assert_eq!(log[1], "enable_raw(100)");
         assert_eq!(log[2], "get_window_size(100)");
-        assert_eq!(log[3], "write(100, 3 bytes)");
+        assert_eq!(log[3], "write(100, \"foo\")");
         assert_eq!(log[4], "read(100)");
         assert_eq!(log[5], "disable_raw(100)");
     }

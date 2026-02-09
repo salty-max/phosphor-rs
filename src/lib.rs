@@ -34,9 +34,11 @@ use crate::{
     terminal::Terminal,
 };
 
+pub mod buffer;
 pub mod input;
 #[macro_use]
 pub mod logger;
+pub mod renderer;
 pub mod terminal;
 
 /// Commands returned by the application to control the runtime flow.
