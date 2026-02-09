@@ -39,6 +39,54 @@ impl Color {
 
         Some(Color::Rgb(r, g, b))
     }
+
+    pub fn to_ansi_fg(&self) -> String {
+        match self {
+            Color::Reset => "39".to_string(),
+            Color::Black => "30".to_string(),
+            Color::Red => "31".to_string(),
+            Color::Green => "32".to_string(),
+            Color::Yellow => "33".to_string(),
+            Color::Blue => "34".to_string(),
+            Color::Magenta => "35".to_string(),
+            Color::Cyan => "36".to_string(),
+            Color::White => "37".to_string(),
+            Color::BrightBlack => "90".to_string(),
+            Color::BrightRed => "91".to_string(),
+            Color::BrightGreen => "92".to_string(),
+            Color::BrightYellow => "93".to_string(),
+            Color::BrightBlue => "94".to_string(),
+            Color::BrightMagenta => "95".to_string(),
+            Color::BrightCyan => "96".to_string(),
+            Color::BrightWhite => "97".to_string(),
+            Color::Indexed(i) => format!("38;5;{}", i),
+            Color::Rgb(r, g, b) => format!("38;2;{};{};{}", r, g, b),
+        }
+    }
+
+    pub fn to_ansi_bg(&self) -> String {
+        match self {
+            Color::Reset => "49".to_string(),
+            Color::Black => "40".to_string(),
+            Color::Red => "41".to_string(),
+            Color::Green => "42".to_string(),
+            Color::Yellow => "43".to_string(),
+            Color::Blue => "44".to_string(),
+            Color::Magenta => "45".to_string(),
+            Color::Cyan => "46".to_string(),
+            Color::White => "47".to_string(),
+            Color::BrightBlack => "100".to_string(),
+            Color::BrightRed => "101".to_string(),
+            Color::BrightGreen => "102".to_string(),
+            Color::BrightYellow => "103".to_string(),
+            Color::BrightBlue => "104".to_string(),
+            Color::BrightMagenta => "105".to_string(),
+            Color::BrightCyan => "106".to_string(),
+            Color::BrightWhite => "107".to_string(),
+            Color::Indexed(i) => format!("48;5;{}", i),
+            Color::Rgb(r, g, b) => format!("48;2;{};{};{}", r, g, b),
+        }
+    }
 }
 
 /// A bitflag representing text modifiers.
@@ -103,6 +151,34 @@ impl Style {
         self.modifiers.insert(modifier);
         self
     }
+
+    pub fn to_ansi(&self) -> String {
+        let mut codes = vec!["0".to_string()];
+
+        if let Some(fg) = self.foreground {
+            codes.push(fg.to_ansi_fg());
+        }
+        if let Some(bg) = self.background {
+            codes.push(bg.to_ansi_bg());
+        }
+        if self.modifiers.contains(Modifier::BOLD) {
+            codes.push("1".to_string());
+        }
+        if self.modifiers.contains(Modifier::DIM) {
+            codes.push("2".to_string());
+        }
+        if self.modifiers.contains(Modifier::ITALIC) {
+            codes.push("3".to_string());
+        }
+        if self.modifiers.contains(Modifier::UNDERLINE) {
+            codes.push("4".to_string());
+        }
+        if self.modifiers.contains(Modifier::REVERSED) {
+            codes.push("7".to_string());
+        }
+
+        format!("\x1b[{}m", codes.join(";"))
+    }
 }
 
 #[cfg(test)]
@@ -130,5 +206,29 @@ mod tests {
         assert_eq!(Color::from_hex("FFFFFF"), Some(Color::Rgb(255, 255, 255)));
         assert_eq!(Color::from_hex("#123"), None);
         assert_eq!(Color::from_hex("invalid"), None);
+    }
+
+    #[test]
+    fn test_color_to_ansi() {
+        assert_eq!(Color::Red.to_ansi_fg(), "31");
+        assert_eq!(Color::BrightBlue.to_ansi_bg(), "104");
+        assert_eq!(Color::Rgb(10, 20, 30).to_ansi_fg(), "38;2;10;20;30");
+        assert_eq!(Color::Indexed(123).to_ansi_bg(), "48;5;123");
+    }
+
+    #[test]
+    fn test_style_to_ansi() {
+        // Default style (just Reset)
+        assert_eq!(Style::default().to_ansi(), "\x1b[0m");
+
+        // Complex style
+        let style = Style::new()
+            .fg(Color::Red)
+            .bg(Color::Blue)
+            .modifier(Modifier::BOLD);
+
+        // Note: The order depends on your implementation.
+        // Assuming: Reset; FG; BG; Modifiers
+        assert_eq!(style.to_ansi(), "\x1b[0;31;44;1m");
     }
 }

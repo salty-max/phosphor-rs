@@ -1,4 +1,4 @@
-use briks::{Application, Command, Event, Frame, KeyCode, run};
+use briks::{Application, Color, Command, Event, Frame, KeyCode, Modifier, Style, run};
 
 struct Counter {
     value: i32,
@@ -35,11 +35,16 @@ impl Application for Counter {
     }
 
     fn draw(&self, frame: &mut Frame) {
-        frame.write_str(
-            0,
-            0,
-            format!("Count: {}\r\nPress +/-, q to quit", self.value).as_str(),
+        frame.with_style(
+            Style::new()
+                .fg(Color::Magenta)
+                .bg(Color::Rgb(0, 0, 255))
+                .modifier(Modifier::BOLD),
+            |f| {
+                f.write_str(0, 0, format!("Count: {}\r\n", self.value).as_str());
+            },
         );
+        frame.write_str(0, 1, "Press +/-, q to quit");
     }
 }
 

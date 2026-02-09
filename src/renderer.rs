@@ -35,6 +35,7 @@ impl Renderer {
 
         for change in diff {
             terminal.write(format!("\x1b[{};{}H", change.y + 1, change.x + 1).as_bytes())?;
+            terminal.write(change.cell.style.to_ansi().as_bytes())?;
             let mut buf = [0u8; 4];
             terminal.write(change.cell.symbol.encode_utf8(&mut buf).as_bytes())?;
         }
@@ -48,7 +49,7 @@ impl Renderer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::terminal::mocks::MockSystem;
+    use crate::{Color, Style, terminal::mocks::MockSystem};
 
     #[test]
     fn test_renderer_minimal_updates() {
@@ -58,7 +59,7 @@ mod tests {
         let mut renderer = Renderer::new(3, 3);
 
         let mut next = Buffer::new(3, 3);
-        next.set(1, 1, 'X');
+        next.set_with_style(1, 1, 'X', Style::new().fg(Color::Red));
 
         renderer.render(&terminal, &next).unwrap();
 
@@ -70,5 +71,7 @@ mod tests {
         if !found {
             panic!("'X' not found in log: {:?}", log);
         }
+        // Check for the style code: Reset(0), Red(31)
+        assert!(log.iter().any(|s| s.contains("0;31")));
     }
 }
