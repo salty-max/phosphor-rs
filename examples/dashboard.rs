@@ -1,4 +1,4 @@
-use briks::{
+use phosphor::{
     Application, Color, Command, Constraint, Direction, Event, Frame, KeyCode, Layout, Modifier,
     Style, run,
     widgets::{Block, Borders, Text},

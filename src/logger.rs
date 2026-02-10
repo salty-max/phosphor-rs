@@ -6,11 +6,11 @@
 //!
 //! # Example
 //! ```no_run
-//! use briks::logger;
+//! use phosphor::logger;
 //!
 //! fn main() -> std::io::Result<()> {
 //!     logger::init()?;
-//!     briks::log!("Application started");
+//!     phosphor::log!("Application started");
 //!     Ok(())
 //! }
 //! ```
@@ -55,7 +55,7 @@ pub fn write_log(msg: &str) {
 ///
 /// # Example
 /// ```no_run
-/// # use briks::log;
+/// # use phosphor::log;
 /// log!("Value: {}", 42);
 /// ```
 #[macro_export]

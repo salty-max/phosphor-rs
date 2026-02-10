@@ -1,8 +1,8 @@
-# Briks - TUI Framework Design
+# Phosphor - TUI Framework Design
 
 ## 1. Philosophy
 
-**Briks** is a state-driven TUI (Text User Interface) framework for Rust.
+**Phosphor** is a state-driven TUI (Text User Interface) framework for Rust.
 
 - **Core principle**: The UI is a pure function of state. All rendering is derived from an immutable snapshot; side effects are modeled explicitly.
 - **Constraint**: From scratch. No external dependencies other than `libc` for system calls.

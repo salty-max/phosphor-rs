@@ -26,7 +26,9 @@ pub enum Constraint {
     Length(u16),
     /// A ratio of the available space (e.g., `Ratio(1, 3)` for one third).
     Ratio(u32, u32),
+    /// Takes up `Fill` space, but is at least `u16` cells.
     Min(u16),
+    /// Takes up `Fill` space, but is at most `u16` cells.
     Max(u16),
 }
 
@@ -113,22 +115,20 @@ impl Layout {
 
         // 1. Calculate used space and count fills
         let mut used_space = 0;
-        let mut fill_count = 0;
+        let mut flex_count = 0;
 
         for c in &self.constraints {
             match c {
                 Constraint::Length(l) => used_space += l,
                 Constraint::Percentage(p) => used_space += (p * total_space) / 100,
-                Constraint::Fill => fill_count += 1,
                 Constraint::Ratio(n, d) => used_space += (total_space as u32 * n / d) as u16,
-                Constraint::Min(_n) => todo!(),
-                Constraint::Max(_n) => todo!(),
+                Constraint::Fill | Constraint::Min(_) | Constraint::Max(_) => flex_count += 1,
             }
         }
 
         // 2. Calculate size of one `Fill` unit
-        let fill_size = if fill_count > 0 {
-            total_space.saturating_sub(used_space) / fill_count
+        let flex_size = if flex_count > 0 {
+            total_space.saturating_sub(used_space) / flex_count
         } else {
             0
         };
@@ -138,10 +138,10 @@ impl Layout {
             let size = match c {
                 Constraint::Length(l) => *l,
                 Constraint::Percentage(p) => (p * total_space) / 100,
-                Constraint::Fill => fill_size,
+                Constraint::Fill => flex_size,
                 Constraint::Ratio(n, d) => (total_space as u32 * n / d) as u16,
-                Constraint::Min(_n) => todo!(),
-                Constraint::Max(_n) => todo!(),
+                Constraint::Min(n) => flex_size.max(*n),
+                Constraint::Max(n) => flex_size.min(*n),
             };
 
             let sub_rect = match &self.direction {
@@ -243,5 +243,26 @@ mod tests {
 
         assert_eq!(rects[0].height, 25);
         assert_eq!(rects[1].height, 75);
+    }
+
+    #[test]
+    fn test_layout_split_min_max() {
+        let rect = Rect::new(0, 0, 100, 100);
+
+        // Min test: flex_size is 50, but Min is 60
+        let layout_min = Layout::new(
+            Direction::Vertical,
+            vec![Constraint::Fill, Constraint::Min(60)],
+        );
+        let rects_min = layout_min.split(rect);
+        assert_eq!(rects_min[1].height, 60);
+
+        // Max test: flex_size is 50, but Max is 40
+        let layout_max = Layout::new(
+            Direction::Vertical,
+            vec![Constraint::Fill, Constraint::Max(40)],
+        );
+        let rects_max = layout_max.split(rect);
+        assert_eq!(rects_max[1].height, 40);
     }
 }

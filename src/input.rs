@@ -264,7 +264,7 @@ fn utf8_char_width(first_byte: u8) -> usize {
     }
 }
 
-/// The main input handler for a Briks application.
+/// The main input handler for a Phosphor application.
 ///
 /// It reads raw bytes from the [`Terminal`] and uses an internal [`Parser`]
 /// to produce semantic [`Event`]s. It handles the ambiguity of the `Esc` key

@@ -1,6 +1,6 @@
-# Briks 🧱
+# Phosphor
 
-**Briks** is a minimalist, testable TUI (Text User Interface) framework for Rust, inspired by the **Model-View-Update (MVU)** architecture (Elm Architecture).
+**Phosphor** is a minimalist, testable TUI (Text User Interface) framework for Rust, inspired by the **Model-View-Update (MVU)** architecture (Elm Architecture).
 
 It is designed for developers who want to build robust, flicker-free terminal applications with 100% testable logic.
 
@@ -15,10 +15,10 @@ It is designed for developers who want to build robust, flicker-free terminal ap
 
 ## 🚀 Quick Start
 
-Add `briks` to your `Cargo.toml` (once published) and implement the `Application` trait:
+Add `phosphor` to your `Cargo.toml` (once published) and implement the `Application` trait:
 
 ```rust
-use briks::{
+use phosphor::{
     Application, Color, Command, Constraint, Direction, Event, Frame, 
     KeyCode, Layout, Modifier, Style, Widget, run, 
     widgets::{Text, Block, Borders}
@@ -69,9 +69,11 @@ impl Application for Counter {
         )
         .split_to(frame.area());
 
-        Text::new("Briks Counter")
-            .style(Style::new().fg(Color::Cyan).modifier(Modifier::BOLD))
-            .render(header, frame);
+        frame.render_widget(
+            Text::new("Phosphor Counter")
+                .style(Style::new().fg(Color::Cyan).modifier(Modifier::BOLD)),
+            header,
+        );
 
         let block = Block::new()
             .borders(Borders::ALL)
@@ -80,14 +82,18 @@ impl Application for Counter {
             .title_style(Style::new().fg(Color::Yellow).modifier(Modifier::BOLD));
 
         let inner = block.inner(body);
-        block.render(body, frame);
+        frame.render_widget(block, body);
 
-        Text::new(format!("Current Count: {}", self.value))
-            .render(inner, frame);
+        frame.render_widget(
+            Text::new(format!("Current Count: {}", self.value)),
+            inner,
+        );
 
-        Text::new("Press + to inc, - to dec, q to quit")
-            .style(Style::new().fg(Color::Rgb(128, 128, 128)))
-            .render(footer, frame);
+        frame.render_widget(
+            Text::new("Press + to inc, - to dec, q to quit")
+                .style(Style::new().fg(Color::Rgb(128, 128, 128))),
+            footer,
+        );
     }
 }
 
@@ -98,7 +104,7 @@ fn main() -> std::io::Result<()> {
 
 ## 🛠️ Current Status
 
-Briks is currently in active development. We are currently working on:
+Phosphor is currently in active development. We are currently working on:
 - [x] Hardware Abstraction Layer (HAL)
 - [x] Event Parsing (ANSI & UTF-8)
 - [x] Flicker-Free Diff-Rendering

@@ -1,4 +1,4 @@
-use briks::{
+use phosphor::{
     Application, Color, Command, Constraint, Direction, Event, Frame, KeyCode, Layout, Modifier,
     Style, Widget, run,
     widgets::{Block, Borders, Text},
@@ -49,9 +49,11 @@ impl Application for Counter {
         )
         .split_to(frame.area());
 
-        Text::new("Counter Example")
-            .style(Style::new().modifier(Modifier::BOLD))
-            .render(header, frame);
+        frame.render_widget(
+            Text::new("Counter Example").style(Style::new().modifier(Modifier::BOLD)),
+            header,
+        );
+
         let block = Block::new()
             .borders(Borders::ALL)
             .title("Hello")
@@ -59,12 +61,14 @@ impl Application for Counter {
             .title_style(Style::new().fg(Color::Green).modifier(Modifier::BOLD));
 
         let inner_area = block.inner(body);
-        block.render(body, frame);
+        frame.render_widget(block, body);
 
-        Text::new(format!("Count: {}", self.value)).render(inner_area, frame);
-        Text::new("Press +/-, q to quit.")
-            .style(Style::new().fg(Color::Rgb(128, 128, 128)))
-            .render(footer, frame);
+        frame.render_widget(Text::new(format!("Count: {}", self.value)), inner_area);
+
+        frame.render_widget(
+            Text::new("Press +/-, q to quit.").style(Style::new().fg(Color::Rgb(128, 128, 128))),
+            footer,
+        );
     }
 }
 

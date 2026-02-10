@@ -1,4 +1,4 @@
-//! **Briks** is a minimalist, testable TUI (Text User Interface) framework for Rust.
+//! **Phosphor** is a minimalist, testable TUI (Text User Interface) framework for Rust.
 //!
 //! It follows the **Model-View-Update (MVU)** architecture (similar to Elm or Iced),
 //! providing a clean separation between your application logic and the terminal hardware.
@@ -11,14 +11,14 @@
 //!
 //! # Example
 //! ```no_run
-//! use briks::{Application, Command, run, Frame, Event};
+//! use phosphor::{Application, Command, run, Frame, Event};
 //!
 //! struct MyApp;
 //! impl Application for MyApp {
 //!     type Action = ();
 //!     fn update(&mut self, _msg: ()) -> Command { Command::Quit }
 //!     fn draw(&self, frame: &mut Frame) {
-//!         frame.write_str(0, 0, "Hello Briks!");
+//!         frame.write_str(0, 0, "Hello Phosphor!");
 //!     }
 //! }
 //!
@@ -60,7 +60,7 @@ pub enum Command {
     Quit,
 }
 
-/// The core trait for a Briks application.
+/// The core trait for a Phosphor application.
 ///
 /// Implementors define the state machine and rendering logic for their TUI.
 pub trait Application {
@@ -98,7 +98,7 @@ pub trait Application {
     fn draw(&self, frame: &mut Frame);
 }
 
-/// Entry point to run a Briks application.
+/// Entry point to run a Phosphor application.
 ///
 /// This function:
 /// 1. Initializes the terminal in **Raw Mode**.
