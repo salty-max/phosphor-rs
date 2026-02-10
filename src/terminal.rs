@@ -28,6 +28,12 @@ pub trait System {
     /// Returns an error if the device cannot be opened.
     fn open_tty(&self) -> io::Result<RawFd>;
 
+    /// Closes the given file descriptor.
+    ///
+    /// # Errors
+    /// Returns an error if the system call fails.
+    fn close_tty(&self, fd: RawFd) -> io::Result<()>;
+
     /// Enables "Raw Mode" on the specified file descriptor.
     ///
     /// This disables line buffering, local echo, and signal processing.
@@ -89,6 +95,15 @@ impl System for LibcSystem {
         }
     }
 
+    fn close_tty(&self, fd: RawFd) -> io::Result<()> {
+        unsafe {
+            if libc::close(fd) < 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        }
+    }
+
     /// Configures the terminal for raw I/O.
     ///
     /// Flags modified:
@@ -122,9 +137,15 @@ impl System for LibcSystem {
 
     fn disable_raw(&self, fd: RawFd, original: &libc::termios) -> io::Result<()> {
         unsafe {
+            // Flush the screen before exiting
+            if libc::tcflush(fd, libc::TCIFLUSH) < 0 {
+                return Err(io::Error::last_os_error());
+            }
+
             if libc::tcsetattr(fd, libc::TCSAFLUSH, original) < 0 {
                 return Err(io::Error::last_os_error());
             }
+
             Ok(())
         }
     }
@@ -223,16 +244,20 @@ impl Terminal {
     /// This is primarily used for dependency injection in tests.
     pub fn new_with_system(system: Box<dyn System>) -> io::Result<Self> {
         let fd = system.open_tty()?;
-        let termios = system.enable_raw(fd)?;
 
-        // Hide cursor
-        system.write(fd, b"\x1b[?25l")?;
-
-        Ok(Self {
+        let mut term = Self {
             system,
             fd,
-            original_termios: Some(termios),
-        })
+            original_termios: None,
+        };
+
+        let termios = term.system.enable_raw(fd)?;
+        term.original_termios = Some(termios);
+
+        term.hide_cursor()?;
+        term.enter_alternate_buffer()?;
+
+        Ok(term)
     }
 
     /// Returns the current size of the terminal as `(cols, rows)`.
@@ -258,6 +283,30 @@ impl Terminal {
     pub fn poll(&self, timeout: Duration) -> io::Result<bool> {
         self.system.poll(self.fd, timeout)
     }
+
+    /// Shows the terminal cursor.
+    pub fn show_cursor(&self) -> io::Result<()> {
+        self.write(b"\x1b[?25h")?;
+        Ok(())
+    }
+
+    /// Hides the terminal cursor.
+    pub fn hide_cursor(&self) -> io::Result<()> {
+        self.write(b"\x1b[?25l")?;
+        Ok(())
+    }
+
+    /// Switches the terminal to the alternate screen buffer.
+    pub fn enter_alternate_buffer(&self) -> io::Result<()> {
+        self.write(b"\x1b[?1049h")?;
+        Ok(())
+    }
+
+    /// Switches the terminal back to the main screen buffer.
+    pub fn exit_alternate_buffer(&self) -> io::Result<()> {
+        self.write(b"\x1b[?1049l")?;
+        Ok(())
+    }
 }
 
 impl Drop for Terminal {
@@ -265,14 +314,16 @@ impl Drop for Terminal {
     ///
     /// If restoration fails, the error is logged to `debug.log`.
     fn drop(&mut self) {
-        // Show cursor
-        let _ = self.write(b"\x1b[?25h");
+        let _ = self.exit_alternate_buffer();
+        let _ = self.show_cursor();
 
         if let Some(termios) = self.original_termios
             && let Err(e) = self.system.disable_raw(self.fd, &termios)
         {
             log!("Error restoring terminal: {}", e);
         }
+
+        let _ = self.system.close_tty(self.fd);
     }
 }
 
@@ -318,6 +369,11 @@ pub(crate) mod mocks {
                 return Err(io::Error::new(io::ErrorKind::Other, "Mock Open Failed"));
             }
             Ok(100)
+        }
+
+        fn close_tty(&self, _fd: RawFd) -> io::Result<()> {
+            self.push_log("close_tty");
+            Ok(())
         }
 
         fn enable_raw(&self, fd: RawFd) -> io::Result<libc::termios> {
@@ -410,14 +466,17 @@ mod tests {
         let log = log_ref.lock().unwrap();
         // Note: Indices depend on exact call order.
         assert_eq!(log[0], "open_tty");
-        // enable_raw(100) -> 100 is the hardcoded FD in the Mock
         assert_eq!(log[1], "enable_raw(100)");
         assert_eq!(log[2], "write(100, \"\x1b[?25l\")");
-        assert_eq!(log[3], "get_window_size(100)");
-        assert_eq!(log[4], "write(100, \"foo\")");
-        assert_eq!(log[5], "read(100)");
-        assert_eq!(log[6], "write(100, \"\x1b[?25h\")");
-        assert_eq!(log[7], "disable_raw(100)");
+        assert_eq!(log[3], "write(100, \"\x1b[?1049h\")");
+        assert_eq!(log[4], "get_window_size(100)");
+        assert_eq!(log[5], "write(100, \"foo\")");
+        assert_eq!(log[6], "read(100)");
+        assert_eq!(log[7], "write(100, \"\x1b[?1049l\")");
+        assert_eq!(log[8], "write(100, \"\x1b[?25h\")");
+        assert_eq!(log[9], "disable_raw(100)");
+        assert_eq!(log[10], "close_tty");
+        assert_eq!(log.len(), 11);
     }
 
     #[test]
@@ -494,5 +553,28 @@ mod integration_tests {
         assert!(size.1 > 0);
 
         unsafe { libc::close(fd) };
+    }
+
+    #[test]
+    #[ignore]
+    fn test_libc_system_poll() {
+        let sys = LibcSystem;
+        let fd = sys.open_tty().expect("Failed to open TTY");
+
+        // Should timeout with false
+        let res = sys
+            .poll(fd, Duration::from_millis(10))
+            .expect("Poll failed");
+        assert!(!res);
+
+        unsafe { libc::close(fd) };
+    }
+
+    #[test]
+    #[ignore]
+    fn test_libc_system_close_tty() {
+        let sys = LibcSystem;
+        let fd = sys.open_tty().expect("Failed to open TTY");
+        sys.close_tty(fd).expect("Failed to close TTY");
     }
 }
