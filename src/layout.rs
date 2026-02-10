@@ -24,6 +24,10 @@ pub enum Constraint {
     Percentage(u16),
     /// A fixed number of cells.
     Length(u16),
+    /// A ratio of the available space (e.g., `Ratio(1, 3)` for one third).
+    Ratio(u32, u32),
+    Min(u16),
+    Max(u16),
 }
 
 /// A rectangular area on the screen.
@@ -116,6 +120,9 @@ impl Layout {
                 Constraint::Length(l) => used_space += l,
                 Constraint::Percentage(p) => used_space += (p * total_space) / 100,
                 Constraint::Fill => fill_count += 1,
+                Constraint::Ratio(n, d) => used_space += (total_space as u32 * n / d) as u16,
+                Constraint::Min(_n) => todo!(),
+                Constraint::Max(_n) => todo!(),
             }
         }
 
@@ -132,6 +139,9 @@ impl Layout {
                 Constraint::Length(l) => *l,
                 Constraint::Percentage(p) => (p * total_space) / 100,
                 Constraint::Fill => fill_size,
+                Constraint::Ratio(n, d) => (total_space as u32 * n / d) as u16,
+                Constraint::Min(_n) => todo!(),
+                Constraint::Max(_n) => todo!(),
             };
 
             let sub_rect = match &self.direction {
@@ -220,5 +230,18 @@ mod tests {
         let layout = Layout::new(Direction::Vertical, vec![Constraint::Fill]);
         let rect = Rect::new(0, 0, 10, 10);
         let _: [Rect; 2] = layout.split_to(rect); // Should panic
+    }
+
+    #[test]
+    fn test_layout_split_ratio() {
+        let layout = Layout::new(
+            Direction::Vertical,
+            vec![Constraint::Ratio(1, 4), Constraint::Ratio(3, 4)],
+        );
+        let rect = Rect::new(0, 0, 100, 100);
+        let rects = layout.split(rect);
+
+        assert_eq!(rects[0].height, 25);
+        assert_eq!(rects[1].height, 75);
     }
 }

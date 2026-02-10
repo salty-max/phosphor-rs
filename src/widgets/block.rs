@@ -117,7 +117,7 @@ impl Block {
             border_type: BorderType::Rounded,
             style: Style::default(),
             title_style: Style::default(),
-            padding_x: 1,
+            padding_x: 0,
             padding_y: 0,
         }
     }
@@ -206,51 +206,51 @@ impl Widget for Block {
         let (h, v, tl, tr, bl, br) = self.border_type.get_chars();
         frame.with_style(self.style, |f| {
             f.render_area(area, |f| {
-                let draw_line = |f: &mut Frame, x, y, len, is_horizontal: bool| {
-                    let mut buf = [0u8; 4];
-                    let s = if is_horizontal { h } else { v };
-                    let s_str = s.encode_utf8(&mut buf);
-                    for i in 0..len {
-                        if is_horizontal {
-                            f.write_str(x + i, y, s_str);
-                        } else {
-                            f.write_str(x, y + i, s_str);
-                        }
-                    }
-                };
+                let width = f.width();
+                let height = f.height();
+                let mut buf = [0u8; 4];
 
-                let corners = [
-                    (0, 0, Borders::TOP | Borders::LEFT, tl),
-                    (f.width() - 1, 0, Borders::TOP | Borders::RIGHT, tr),
-                    (0, f.height() - 1, Borders::BOTTOM | Borders::LEFT, bl),
-                    (
-                        f.width() - 1,
-                        f.height() - 1,
-                        Borders::BOTTOM | Borders::RIGHT,
-                        br,
-                    ),
-                ];
-
+                // 1. Draw Sides (Edge-to-Edge)
                 if self.borders.contains(Borders::TOP) {
-                    draw_line(f, 1, 0, f.width() - 2, true);
+                    let s = h.encode_utf8(&mut buf);
+                    for x in 0..width {
+                        f.write_str(x, 0, s);
+                    }
                 }
                 if self.borders.contains(Borders::BOTTOM) {
-                    draw_line(f, 1, f.height() - 1, f.width() - 2, true);
+                    let s = h.encode_utf8(&mut buf);
+                    for x in 0..width {
+                        f.write_str(x, height - 1, s);
+                    }
                 }
                 if self.borders.contains(Borders::LEFT) {
-                    draw_line(f, 0, 1, f.height() - 2, false);
+                    let s = v.encode_utf8(&mut buf);
+                    for y in 0..height {
+                        f.write_str(0, y, s);
+                    }
                 }
                 if self.borders.contains(Borders::RIGHT) {
-                    draw_line(f, f.width() - 1, 1, f.height() - 2, false);
-                }
-
-                let mut buf = [0u8; 4];
-                for (x, y, borders, s) in corners {
-                    if self.borders.contains(borders) {
-                        f.write_str(x, y, s.encode_utf8(&mut buf));
+                    let s = v.encode_utf8(&mut buf);
+                    for y in 0..height {
+                        f.write_str(width - 1, y, s);
                     }
                 }
 
+                // 2. Draw Corners (Overwrite intersections)
+                let corners = [
+                    (0, 0, Borders::TOP | Borders::LEFT, tl),
+                    (width - 1, 0, Borders::TOP | Borders::RIGHT, tr),
+                    (0, height - 1, Borders::BOTTOM | Borders::LEFT, bl),
+                    (width - 1, height - 1, Borders::BOTTOM | Borders::RIGHT, br),
+                ];
+
+                for (x, y, req, sym) in corners {
+                    if self.borders.contains(req) {
+                        f.write_str(x, y, sym.encode_utf8(&mut buf));
+                    }
+                }
+
+                // 3. Draw Title
                 if let Some(t) = self.title {
                     let style = if self.title_style == Style::default() {
                         self.style

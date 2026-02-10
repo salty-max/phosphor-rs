@@ -4,7 +4,7 @@
 //! for drawing text, shapes, and widgets without having to manipulate
 //! individual cells manually.
 
-use crate::{Buffer, Rect, Style};
+use crate::{Buffer, Rect, Style, Widget};
 
 /// A high-level handle for drawing to a buffer.
 pub struct Frame<'a> {
@@ -90,13 +90,29 @@ impl<'a> Frame<'a> {
         f(self);
         self.current_style = old_style;
     }
+    /// Renders a widget into the given area of the frame.
+    pub fn render_widget<W: Widget>(&mut self, widget: W, area: Rect) {
+        widget.render(area, self);
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Buffer;
     use crate::Color;
+    use crate::buffer::Buffer;
+    use crate::widgets::Text;
+
+    #[test]
+    fn test_frame_render_widget() {
+        let mut buffer = Buffer::new(10, 1);
+        let mut frame = Frame::new(&mut buffer, Rect::new(0, 0, 10, 1));
+        let text = Text::new("W");
+
+        frame.render_widget(text, Rect::new(0, 0, 10, 1));
+
+        assert_eq!(buffer.get(0, 0).symbol, 'W');
+    }
 
     #[test]
     fn test_frame_with_style_scoped() {
