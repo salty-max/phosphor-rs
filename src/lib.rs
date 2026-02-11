@@ -109,10 +109,25 @@ pub trait Application {
 /// # Errors
 /// Returns an [`io::Error`] if the terminal cannot be initialized or if a
 /// write operation fails.
+///
+/// # Panics
+/// If the application panics, this function catches the unwind, restores the
+/// terminal state (exits raw mode, shows cursor), and then resumes the panic.
+/// This ensures the terminal is not left in a broken state.
 pub fn run<App: Application>(app: App) -> io::Result<()> {
     let terminal = Terminal::new()?;
     let input = Input::new();
-    run_app(app, terminal, input)
+    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        run_app(app, terminal, input)
+    }));
+
+    match res {
+        Ok(run_result) => run_result,
+        Err(payload) => {
+            // Resume panic
+            std::panic::resume_unwind(payload);
+        }
+    }
 }
 
 /// The internal event loop.
