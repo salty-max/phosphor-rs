@@ -33,7 +33,7 @@ use std::time::Duration;
 
 pub use crate::buffer::{Buffer, Cell};
 pub use crate::frame::Frame;
-pub use crate::input::{Event, Input, KeyCode, KeyEvent};
+pub use crate::input::{Event, Input, KeyCode, KeyEvent, MouseEvent, MouseKind};
 pub use crate::layout::{Constraint, Direction, Layout, Rect};
 use crate::renderer::Renderer;
 pub use crate::style::{Color, Modifier, Style};

@@ -255,6 +255,7 @@ impl Terminal {
         term.original_termios = Some(termios);
 
         term.hide_cursor()?;
+        term.enable_mouse_capture()?;
         term.enter_alternate_buffer()?;
 
         Ok(term)
@@ -307,6 +308,16 @@ impl Terminal {
         self.write(b"\x1b[?1049l")?;
         Ok(())
     }
+
+    pub fn enable_mouse_capture(&self) -> io::Result<()> {
+        self.write(b"\x1b[?1000h")?;
+        Ok(())
+    }
+
+    pub fn disable_mouse_capture(&self) -> io::Result<()> {
+        self.write(b"\x1b[?1000l")?;
+        Ok(())
+    }
 }
 
 impl Drop for Terminal {
@@ -314,6 +325,7 @@ impl Drop for Terminal {
     ///
     /// If restoration fails, the error is logged to `debug.log`.
     fn drop(&mut self) {
+        let _ = self.disable_mouse_capture();
         let _ = self.exit_alternate_buffer();
         let _ = self.show_cursor();
 
@@ -468,15 +480,17 @@ mod tests {
         assert_eq!(log[0], "open_tty");
         assert_eq!(log[1], "enable_raw(100)");
         assert_eq!(log[2], "write(100, \"\x1b[?25l\")");
-        assert_eq!(log[3], "write(100, \"\x1b[?1049h\")");
-        assert_eq!(log[4], "get_window_size(100)");
-        assert_eq!(log[5], "write(100, \"foo\")");
-        assert_eq!(log[6], "read(100)");
-        assert_eq!(log[7], "write(100, \"\x1b[?1049l\")");
-        assert_eq!(log[8], "write(100, \"\x1b[?25h\")");
-        assert_eq!(log[9], "disable_raw(100)");
-        assert_eq!(log[10], "close_tty");
-        assert_eq!(log.len(), 11);
+        assert_eq!(log[3], "write(100, \"\x1b[?1000h\")");
+        assert_eq!(log[4], "write(100, \"\x1b[?1049h\")");
+        assert_eq!(log[5], "get_window_size(100)");
+        assert_eq!(log[6], "write(100, \"foo\")");
+        assert_eq!(log[7], "read(100)");
+        assert_eq!(log[8], "write(100, \"\x1b[?1000l\")");
+        assert_eq!(log[9], "write(100, \"\x1b[?1049l\")");
+        assert_eq!(log[10], "write(100, \"\x1b[?25h\")");
+        assert_eq!(log[11], "disable_raw(100)");
+        assert_eq!(log[12], "close_tty");
+        assert_eq!(log.len(), 13);
     }
 
     #[test]

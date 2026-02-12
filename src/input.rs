@@ -19,8 +19,39 @@ use crate::terminal::Terminal;
 pub enum Event {
     /// A keyboard press (character, control key, or function key).
     Key(KeyEvent),
+    /// A mouse event (click, scroll, etc.).
+    Mouse(MouseEvent),
     /// A terminal resize event (columns, rows).
     Resize(u16, u16),
+}
+
+/// Represents a mouse event.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MouseEvent {
+    /// The column (x) where the event occurred (0-based).
+    pub x: u16,
+    /// The row (y) where the event occurred (0-based).
+    pub y: u16,
+    /// The type of mouse event (click, scroll, etc.).
+    pub kind: MouseKind,
+}
+
+impl MouseEvent {
+    /// Creates a new mouse event.
+    pub fn new(x: u16, y: u16, kind: MouseKind) -> Self {
+        Self { x, y, kind }
+    }
+}
+
+/// The type of mouse action.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MouseKind {
+    LeftClick,
+    RightClick,
+    MiddleClick,
+    ScrollUp,
+    ScrollDown,
+    Other,
 }
 
 /// Represents a specific key press, including modifiers.
@@ -184,6 +215,31 @@ impl Parser {
                             b'A' => {
                                 events.push(Event::Key(KeyEvent::new(KeyCode::Up)));
                                 self.consume(3);
+                            }
+                            b'M' => {
+                                if self.buffer.len() < 6 {
+                                    break;
+                                }
+                                self.consume(3);
+
+                                let cb = self.buffer.pop_front().unwrap();
+                                let cx = self.buffer.pop_front().unwrap();
+                                let cy = self.buffer.pop_front().unwrap();
+
+                                let kind = match cb.saturating_sub(32) {
+                                    0 => MouseKind::LeftClick,
+                                    1 => MouseKind::MiddleClick,
+                                    2 => MouseKind::RightClick,
+                                    64 => MouseKind::ScrollUp,
+                                    65 => MouseKind::ScrollDown,
+                                    _ => MouseKind::Other,
+                                };
+
+                                events.push(Event::Mouse(MouseEvent::new(
+                                    (cx.saturating_sub(33)) as u16,
+                                    (cy.saturating_sub(33)) as u16,
+                                    kind,
+                                )));
                             }
                             _ => {
                                 events.push(Event::Key(KeyEvent::new(KeyCode::Esc)));
@@ -369,6 +425,25 @@ mod tests {
         // 'é' is 0xC3 0xA9 in UTF-8
         let events = parser.parse(&[0xc3, 0xa9]);
         assert_eq!(events, vec![Event::Key(KeyEvent::new(KeyCode::Char('é')))]);
+    }
+
+    #[test]
+    fn test_parse_mouse_click() {
+        let mut parser = Parser::new();
+        // \x1b[M + (0+32) + (10+33) + (5+33) -> Left click at 10, 5
+        // 0+32 = 32 (' ')
+        // 10+33 = 43 ('+')
+        // 5+33 = 38 ('&')
+        let events = parser.parse(b"\x1b[M +&");
+
+        assert_eq!(events.len(), 1);
+        if let Event::Mouse(mouse) = &events[0] {
+            assert_eq!(mouse.kind, MouseKind::LeftClick);
+            assert_eq!(mouse.x, 10);
+            assert_eq!(mouse.y, 5);
+        } else {
+            panic!("Expected Mouse event");
+        }
     }
 }
 
