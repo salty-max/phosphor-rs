@@ -3,10 +3,12 @@
 use crate::{Frame, Rect};
 
 pub mod block;
+pub mod list;
 pub mod scrollable;
 pub mod text;
 
 pub use block::{Block, BorderType, Borders};
+pub use list::List;
 pub use scrollable::Scrollable;
 pub use text::Text;
 
